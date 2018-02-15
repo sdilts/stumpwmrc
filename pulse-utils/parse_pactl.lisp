@@ -1,0 +1,85 @@
+;; ;;; TODO: put this in its own package
+
+;; (in-package :pulse-utils)
+
+(require :cl-ppcre)
+(defvar *volume-step-number* 25
+  "The number of volume level settings that are available. Should
+evenly divide *max-volume-level*.")
+
+(defvar *max-volume-level* 100
+  "The maximum volume level allowed")
+
+;; This has been made read only, as sink number and volume may change
+;; between calls (need to refresh every time)
+(defstruct sink-info
+  (sink 0 :type number :read-only t)
+  (volume 0  :type number :read-only t)
+  (state "" :type string :read-only t)
+  (name "" :type string  :read-only t)
+  (description "" :type string :read-only t))
+
+(defun extract-sink-properties (sink-text)
+  ;(declare (type (string sink-text)))
+  (make-sink-info
+   :sink (parse-integer (cl-ppcre:register-groups-bind (sink)
+ 			    ("Sink #(\\w+)" sink-text) sink))
+   :volume (parse-integer (cl-ppcre:register-groups-bind (volume)
+	     ("Volume:.*\/ *(\\d+)%" sink-text) volume))
+   :state (cl-ppcre:register-groups-bind (state)
+	      ("State: (.*)" sink-text) state)
+   :name (cl-ppcre:register-groups-bind (name)
+	     ("Name: (.*)" sink-text) name)
+   :description (cl-ppcre:register-groups-bind (name)
+		    ("Description: (.*)" sink-text) name)))
+
+(defun get-sink-texts ()
+  "Returns a list slink texts"
+  (cl-ppcre:split "\\n\\n" (run-shell-command "pactl list sinks" t)))
+
+(defun get-available-sinks ()
+  (mapcar #'extract-sink-properties (get-sink-texts)))
+
+(defun get-default-sink-name ()
+  (cl-ppcre:register-groups-bind (sink-name)
+      ("Default Sink: (.*)" (run-shell-command "pactl info" t))
+    sink-name))
+
+(defun get-default-sink-info ()
+  (let ((default (get-default-sink-name)))
+    (dolist (sink (get-available-sinks))
+      (if (equal default (sink-info-name sink))
+	  (return sink)))))
+
+(defun switch-to-sink (sink)
+  "Switches all applications to use the specified sink"
+  (declare (type sink-info sink))
+  (run-shell-command (concat "/home/stuart/.stumpwm.d/pulse-utils/change-sink.sh "
+			     (write-to-string (sink-info-sink sink)))))
+
+(defun volume-adjust (delta)
+  (declare (type integer delta))
+  ;; check to see the current volume:
+  (let* ((default-sink (get-default-sink-info))
+	 (new-vol (+ delta (sink-info-volume default-sink))))
+    (cond
+      ;; vol above max?
+      ((> new-vol *max-volume-level*)
+       (setf new-vol *max-volume-level*)
+       (run-shell-command (format nil "pactl set-sink-volume ~S ~D%"
+				  (sink-info-volume default-sink)
+				  *max-volume-level*)))
+      ;; vol was at zero?
+      ((and (> new-vol 0) (= (sink-info-volume default-sink) 0))
+       ;;make sure the sink isn't muted:
+       (run-shell-command (format nil "pactl set-sink-mute ~S 0" (sink-info-sink default-sink)))
+       (run-shell-command (format nil "pactl set-sink-volume ~S ~@D%" (sink-info-sink default-sink) delta) t))
+      ;; new vol at zero?
+      ((<= new-vol 0)
+       ;; mute so we get some pretty lights:
+       (setf new-vol 0)
+       (run-shell-command (format nil "pactl set-sink-volume ~S 0%" (sink-info-sink default-sink)) t)
+       (run-shell-command (format nil "pactl set-sink-mute ~S 1" (sink-info-sink default-sink))))
+      (t
+       (run-shell-command (format nil "pactl set-sink-volume ~D ~D%" (sink-info-sink default-sink) new-vol))))
+    (echo-progress new-vol :label "Volume" :width *volume-step-number*)))
