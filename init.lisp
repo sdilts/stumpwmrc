@@ -34,4 +34,10 @@
 (run-shell-command "xrdb -merge ~/.Xresources")
 (run-shell-command "xmodmap ~/.Xmodmap")
 (run-shell-command "feh --bg-scale ~/Pictures/simonstalenhag_gas.jpg")
-;;(run-shell-command "xrd
+(run-shell-command "xscreensaver -nosplash")
+
+(defcommand dmenu-run () ()
+  (run-shell-command "dmenu_run"))
+
+(define-key *root-map* (kbd "!") "dmenu-run")
+(define-key *groups-map* (kbd "l") "grouplist")
